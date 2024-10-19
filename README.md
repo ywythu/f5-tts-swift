@@ -1,7 +1,7 @@
 
 # F5 TTS for Swift (WIP)
 
-Implementation of [F5-TTS](https://arxiv.org/abs/2410.06885) in Swift, using the [MLX Swift]([https://github.com/ml-explore/mlx](https://github.com/ml-explore/mlx-swift)) framework.
+Implementation of [F5-TTS](https://arxiv.org/abs/2410.06885) in Swift, using the [MLX Swift](https://github.com/ml-explore/mlx](https://github.com/ml-explore/mlx-swift) framework.
 
 You can listen to a [sample here](https://s3.amazonaws.com/lucasnewman.datasets/f5tts/sample.wav) that was generated in ~11 seconds on an M3 Max MacBook Pro.
 
