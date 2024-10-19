@@ -32,8 +32,8 @@ let package = Package(
             ],
             path: "Sources/F5TTS",
             resources: [
-                .copy("mel_filters.npy"),
-                .copy("test_en_1_ref_short.wav")
+                .copy("Resources/test_en_1_ref_short.wav"),
+                .copy("Resources/mel_filters.npy")
             ]
         ),
         .executableTarget(
