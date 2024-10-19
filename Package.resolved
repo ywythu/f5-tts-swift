@@ -44,6 +44,15 @@
         "revision" : "4d25d20e49d2269aec1556231f8e278db7b2a4f0",
         "version" : "0.1.13"
       }
+    },
+    {
+      "identity" : "vocos-swift",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/lucasnewman/vocos-swift.git",
+      "state" : {
+        "revision" : "021e7af9d0c0aff9f7b62bf9839c37554287f3af",
+        "version" : "0.0.1"
+      }
     }
   ],
   "version" : 2

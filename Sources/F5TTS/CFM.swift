@@ -41,7 +41,6 @@ func padToLength(_ t: MLXArray, length: Int, value: Float? = nil) -> MLXArray {
 func padSequence(_ t: [MLXArray], paddingValue: Float = 0) -> MLXArray {
     let maxLen = t.map { $0.shape.last ?? 0 }.max() ?? 0
     let t = MLX.stacked(t, axis: 0)
-    let paddedArrays = padToLength(t, length: maxLen, value: paddingValue)
     return padToLength(t, length: maxLen, value: paddingValue)
 }
 
@@ -108,7 +107,7 @@ public class F5TTS: Module {
         lens: MLXArray? = nil,
         steps: Int = 32,
         cfgStrength: Float = 2.0,
-        swaySamplingCoef: Float? = -1.0,
+        swayCoef: Float? = -1.0,
         seed: Int? = nil,
         maxDuration: Int = 4096,
         vocoder: ((MLXArray) -> MLXArray)? = nil,
@@ -203,12 +202,12 @@ public class F5TTS: Module {
 
         var t = MLXArray.linspace(Float32(0.0), Float32(1.0), count: steps)
 
-        if let coef = swaySamplingCoef {
+        if let coef = swayCoef {
             t = t + coef * (MLX.cos(MLXArray(.pi) / 2 * t) - 1 + t)
         }
 
         let trajectory = self.odeint(fun: fn, y0: y0Padded, t: t)
-        var sampled = trajectory[-1]
+        let sampled = trajectory[-1]
         var out = MLX.where(condMask, cond, sampled)
 
         if let vocoder = vocoder {
