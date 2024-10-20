@@ -28,7 +28,8 @@ let package = Package(
                 .product(name: "MLXFFT", package: "mlx-swift"),
                 .product(name: "MLXLinalg", package: "mlx-swift"),
                 .product(name: "MLXRandom", package: "mlx-swift"),
-                .product(name: "Transformers", package: "swift-transformers")
+                .product(name: "Transformers", package: "swift-transformers"),
+                .product(name: "Vocos", package: "vocos-swift"),
             ],
             path: "Sources/F5TTS",
             resources: [
