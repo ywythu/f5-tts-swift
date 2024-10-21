@@ -20,17 +20,20 @@ public class F5TTS: Module {
     let dim: Int
     let numChannels: Int
     let vocabCharMap: [String: Int]
+    let _durationPredictor: DurationPredictor?
 
     init(
         transformer: DiT,
         melSpec: MelSpec,
-        vocabCharMap: [String: Int]
+        vocabCharMap: [String: Int],
+        durationPredictor: DurationPredictor? = nil
     ) {
         self.melSpec = melSpec
         self.numChannels = self.melSpec.nMels
         self.transformer = transformer
         self.dim = transformer.dim
         self.vocabCharMap = vocabCharMap
+        self._durationPredictor = durationPredictor
 
         super.init()
     }
@@ -59,7 +62,7 @@ public class F5TTS: Module {
     private func sample(
         cond: MLXArray,
         text: [String],
-        duration: Any,
+        duration: Int? = nil,
         lens: MLXArray? = nil,
         steps: Int = 32,
         cfgStrength: Double = 2.0,
@@ -70,7 +73,7 @@ public class F5TTS: Module {
         noRefAudio: Bool = false,
         editMask: MLXArray? = nil,
         progressHandler: ((Double) -> Void)? = nil
-    ) -> (MLXArray, MLXArray) {
+    ) throws -> (MLXArray, MLXArray) {
         MLX.eval(self.parameters())
 
         var cond = cond
@@ -98,13 +101,24 @@ public class F5TTS: Module {
         }
 
         // duration
+        var resolvedDuration: MLXArray? = (duration != nil) ? MLXArray(duration!) : nil
 
-        var duration = (duration as? Int).map { MLX.full([batch], values: $0, type: Int.self) } ?? duration as! MLXArray
+        if resolvedDuration == nil, let durationPredictor = self._durationPredictor {
+            let estimatedDurationInSeconds = durationPredictor(cond, text: text).item(Float32.self)
+            resolvedDuration = MLXArray(Int(Double(estimatedDurationInSeconds) * F5TTS.framesPerSecond)) + lens
+            print("Generating \(estimatedDurationInSeconds) seconds (\(resolvedDuration) total frames) of audio...")
+        }
+
+        guard let resolvedDuration else {
+            throw F5TTSError.unableToDetermineDuration
+        }
+
+        var duration = resolvedDuration
         duration = MLX.clip(MLX.maximum(lens + 1, duration), min: 0, max: maxDuration)
-        let maxDur = duration.max().item(Int.self)
+        let maxDuration = duration.max().item(Int.self)
 
-        cond = MLX.padded(cond, widths: [.init((0, 0)), .init((0, maxDur - condSeqLen)), .init((0, 0))])
-        condMask = MLX.padded(condMask, widths: [.init((0, 0)), .init((0, maxDur - condMask.shape[1]))], value: MLXArray(false))
+        cond = MLX.padded(cond, widths: [.init((0, 0)), .init((0, maxDuration - condSeqLen)), .init((0, 0))])
+        condMask = MLX.padded(condMask, widths: [.init((0, 0)), .init((0, maxDuration - condMask.shape[1]))], value: MLXArray(false))
         condMask = condMask.expandedDimensions(axis: -1)
         let stepCond = MLX.where(condMask, cond, MLX.zeros(like: cond))
 
@@ -127,7 +141,10 @@ public class F5TTS: Module {
                 mask: mask
             )
 
-            guard cfgStrength > 1e-5 else { return pred }
+            guard cfgStrength > 1e-5 else {
+                pred.eval()
+                return pred
+            }
 
             let nullPred = self.transformer(
                 x: x,
@@ -143,7 +160,7 @@ public class F5TTS: Module {
 
             let output = pred + (pred - nullPred) * cfgStrength
             output.eval()
-            
+
             return output
         }
 
@@ -168,7 +185,7 @@ public class F5TTS: Module {
         let trajectory = self.odeint(fun: fn, y0: y0Padded, t: t)
         let sampled = trajectory[-1]
         var out = MLX.where(condMask, cond, sampled)
-        
+
         if let vocoder = vocoder {
             out = vocoder(out)
         }
@@ -207,30 +224,15 @@ public class F5TTS: Module {
         let refAudioDuration = Double(audio.shape[0]) / Double(F5TTS.sampleRate)
         print("Using reference audio with duration: \(refAudioDuration)")
 
-        // use a heuristic to determine the duration if not provided
-
-        var generatedDuration = duration
-        if generatedDuration == nil {
-            generatedDuration = F5TTS.estimatedDuration(refAudio: audio, refText: referenceText, text: text)
-        }
-
-        guard let generatedDuration else {
-            throw F5TTSError.unableToDetermineDuration
-        }
-        print("Using generated duration: \(generatedDuration)")
-
         // generate the audio
 
         let normalizedAudio = F5TTS.normalizeAudio(audio: audio)
-
         let processedText = referenceText + " " + text
-        let frameDuration = Int((refAudioDuration + generatedDuration) * F5TTS.framesPerSecond)
-        print("Generating \(generatedDuration) seconds (\(frameDuration) total frames) of audio...")
 
-        let (outputAudio, _) = self.sample(
+        let (outputAudio, _) = try self.sample(
             cond: normalizedAudio.expandedDimensions(axis: 0),
             text: [processedText],
-            duration: frameDuration,
+            duration: nil,
             steps: 32,
             cfgStrength: cfg,
             swayCoef: sway,
@@ -240,10 +242,7 @@ public class F5TTS: Module {
             print("Generation progress: \(progress)")
         }
 
-        let generatedAudio = outputAudio[audio.shape[0]...]
-        
-        print("Got generated audio of shape: \(generatedAudio.shape)")
-        return generatedAudio
+        return outputAudio[audio.shape[0]...]
     }
 }
 
@@ -278,6 +277,35 @@ public extension F5TTS {
         let vocabEntries = vocabString.split(separator: "\n").map { String($0) }
         let vocab = Dictionary(uniqueKeysWithValues: zip(vocabEntries, vocabEntries.indices))
 
+        // duration model
+
+        var durationPredictor: DurationPredictor?
+        let durationModelURL = modelDirectoryURL.appendingPathComponent("duration_model.safetensors")
+        do {
+            let durationModelWeights = try loadArrays(url: durationModelURL)
+
+            let durationTransformer = DurationTransformer(
+                dim: 256,
+                depth: 8,
+                heads: 8,
+                dimHead: 64,
+                ffMult: 2,
+                textNumEmbeds: vocab.count,
+                textDim: 256,
+                convLayers: 2
+            )
+            let predictor = DurationPredictor(
+                transformer: durationTransformer,
+                melSpec: MelSpec(filterbank: filterbank),
+                vocabCharMap: vocab
+            )
+            try predictor.update(parameters: ModuleParameters.unflattened(durationModelWeights), verify: [.all])
+
+            durationPredictor = predictor
+        } catch {
+            print("Warning: no duration predictor model found.")
+        }
+
         // model
 
         let dit = DiT(
@@ -289,15 +317,13 @@ public extension F5TTS {
             textDim: 512,
             convLayers: 4
         )
-        let f5tts = F5TTS(transformer: dit, melSpec: MelSpec(filterbank: filterbank), vocabCharMap: vocab)
-
-        // load weights
-
-        var weights = [String: MLXArray]()
-        for (key, value) in modelWeights {
-            weights[key] = value
-        }
-        try f5tts.update(parameters: ModuleParameters.unflattened(weights), verify: [.all])
+        let f5tts = F5TTS(
+            transformer: dit,
+            melSpec: MelSpec(filterbank: filterbank),
+            vocabCharMap: vocab,
+            durationPredictor: durationPredictor
+        )
+        try f5tts.update(parameters: ModuleParameters.unflattened(modelWeights), verify: [.all])
 
         return f5tts
     }
