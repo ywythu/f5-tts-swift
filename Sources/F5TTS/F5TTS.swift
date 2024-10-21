@@ -105,7 +105,7 @@ public class F5TTS: Module {
 
         if resolvedDuration == nil, let durationPredictor = self._durationPredictor {
             let estimatedDurationInSeconds = durationPredictor(cond, text: text).item(Float32.self)
-            resolvedDuration = MLXArray(Int(Double(estimatedDurationInSeconds) * F5TTS.framesPerSecond)) + lens
+            resolvedDuration = MLXArray(Int(Double(estimatedDurationInSeconds) * F5TTS.framesPerSecond))
             print("Generating \(estimatedDurationInSeconds) seconds (\(resolvedDuration) total frames) of audio...")
         }
 
