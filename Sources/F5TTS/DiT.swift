@@ -77,9 +77,7 @@ class InputEmbedding: Module {
 
         let combined = MLX.concatenated([x, cond, textEmbed], axis: -1)
         var output = proj(combined)
-        output.eval()
         output = conv_pos_embed(output) + output
-        output.eval()
         return output
     }
 }

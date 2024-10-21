@@ -58,10 +58,7 @@ func precomputeFreqsCis(dim: Int, end: Int, theta: Float = 10000.0, thetaRescale
     let freqsCos = outerFreqs.cos()
     let freqsSin = outerFreqs.sin()
 
-    let output = MLX.concatenated([freqsCos, freqsSin], axis: -1)
-    output.eval()
-
-    return output
+    return MLX.concatenated([freqsCos, freqsSin], axis: -1)
 }
 
 func getPosEmbedIndices(start: MLXArray, length: Int, maxPos: Int, scale: Float = 1.0) -> MLXArray {

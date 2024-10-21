@@ -141,7 +141,10 @@ public class F5TTS: Module {
 
             progressHandler?(Double(t))
 
-            return pred + (pred - nullPred) * cfgStrength
+            let output = pred + (pred - nullPred) * cfgStrength
+            output.eval()
+            
+            return output
         }
 
         // noise input
@@ -165,11 +168,10 @@ public class F5TTS: Module {
         let trajectory = self.odeint(fun: fn, y0: y0Padded, t: t)
         let sampled = trajectory[-1]
         var out = MLX.where(condMask, cond, sampled)
-
+        
         if let vocoder = vocoder {
             out = vocoder(out)
         }
-
         out.eval()
 
         return (out, trajectory)
@@ -239,6 +241,8 @@ public class F5TTS: Module {
         }
 
         let generatedAudio = outputAudio[audio.shape[0]...]
+        
+        print("Got generated audio of shape: \(generatedAudio.shape)")
         return generatedAudio
     }
 }
@@ -331,9 +335,8 @@ public extension F5TTS {
 
     static func estimatedDuration(refAudio: MLXArray, refText: String, text: String, speed: Double = 1.0) -> TimeInterval {
         let refDurationInFrames = refAudio.shape[0] / self.hopLength
-        let pausePunctuation = "。，、；：？！"
-        let refTextLength = refText.utf8.count + 3 * pausePunctuation.utf8.count
-        let genTextLength = text.utf8.count + 3 * pausePunctuation.utf8.count
+        let refTextLength = refText.utf8.count
+        let genTextLength = text.utf8.count
 
         let refAudioToTextRatio = Double(refDurationInFrames) / Double(refTextLength)
         let textLength = Double(genTextLength) / speed
