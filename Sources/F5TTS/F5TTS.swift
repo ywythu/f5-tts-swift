@@ -240,6 +240,7 @@ public class F5TTS: Module {
             vocoder: vocos.decode
         ) { progress in
             print("Generation progress: \(progress)")
+            progressHandler?(progress)
         }
 
         return outputAudio[audio.shape[0]...]
