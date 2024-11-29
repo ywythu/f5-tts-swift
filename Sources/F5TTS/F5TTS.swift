@@ -106,12 +106,13 @@ public class F5TTS: Module {
         if resolvedDuration == nil, let durationPredictor = self._durationPredictor {
             let estimatedDurationInSeconds = durationPredictor(cond, text: text).item(Float32.self)
             resolvedDuration = MLXArray(Int(Double(estimatedDurationInSeconds) * F5TTS.framesPerSecond))
-            print("Generating \(estimatedDurationInSeconds) seconds (\(resolvedDuration) total frames) of audio...")
         }
 
         guard let resolvedDuration else {
             throw F5TTSError.unableToDetermineDuration
         }
+
+        print("Generating \(Double(resolvedDuration.item(Float32.self)) / F5TTS.framesPerSecond) seconds of audio...")
 
         var duration = resolvedDuration
         duration = MLX.clip(MLX.maximum(lens + 1, duration), min: 0, max: maxDuration)
@@ -281,18 +282,18 @@ public extension F5TTS {
         // duration model
 
         var durationPredictor: DurationPredictor?
-        let durationModelURL = modelDirectoryURL.appendingPathComponent("duration_model.safetensors")
+        let durationModelURL = modelDirectoryURL.appendingPathComponent("duration_v2.safetensors")
         do {
             let durationModelWeights = try loadArrays(url: durationModelURL)
 
             let durationTransformer = DurationTransformer(
-                dim: 256,
+                dim: 512,
                 depth: 8,
                 heads: 8,
                 dimHead: 64,
                 ffMult: 2,
                 textNumEmbeds: vocab.count,
-                textDim: 256,
+                textDim: 512,
                 convLayers: 2
             )
             let predictor = DurationPredictor(
@@ -304,7 +305,7 @@ public extension F5TTS {
 
             durationPredictor = predictor
         } catch {
-            print("Warning: no duration predictor model found.")
+            print("Warning: no duration predictor model found: \(error)")
         }
 
         // model

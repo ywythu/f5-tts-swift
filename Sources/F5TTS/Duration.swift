@@ -22,13 +22,38 @@ class DurationInputEmbedding: Module {
     }
 }
 
+public class DurationBlock: Module {
+    let attn_norm: LayerNorm
+    let attn: Attention
+    let ff_norm: LayerNorm
+    let ff: FeedForward
+
+    init(dim: Int, heads: Int, dimHead: Int, ffMult: Int = 4, dropout: Float = 0.1) {
+        self.attn_norm = LayerNorm(dimensions: dim)
+        self.attn = Attention(dim: dim, heads: heads, dimHead: dimHead, dropout: dropout)
+        self.ff_norm = LayerNorm(dimensions: dim, eps: 1e-6, affine: false)
+        self.ff = FeedForward(dim: dim, mult: ffMult, dropout: dropout, approximate: "tanh")
+
+        super.init()
+    }
+
+    func callAsFunction(_ x: MLXArray, mask: MLXArray? = nil, rope: (MLXArray, Float)? = nil) -> MLXArray {
+        let norm = attn_norm(x)
+        let attnOutput = attn(norm, mask: mask, rope: rope)
+        var output = x + attnOutput
+        let normedOutput = ff_norm(output)
+        let ffOutput = ff(normedOutput)
+        output = output + ffOutput
+        return output
+    }
+}
+
 public class DurationTransformer: Module {
     let dim: Int
-    let time_embed: TimestepEmbedding
     let text_embed: TextEmbedding
     let input_embed: DurationInputEmbedding
     let rotary_embed: RotaryEmbedding
-    let transformer_blocks: [DiTBlock]
+    let transformer_blocks: [DurationBlock]
     let norm_out: RMSNorm
     let depth: Int
 
@@ -46,14 +71,13 @@ public class DurationTransformer: Module {
     ) {
         self.dim = dim
         let actualTextDim = textDim ?? melDim
-        self.time_embed = TimestepEmbedding(dim: dim)
         self.text_embed = TextEmbedding(textNumEmbeds: textNumEmbeds, textDim: actualTextDim, convLayers: convLayers)
         self.input_embed = DurationInputEmbedding(melDim: melDim, textDim: actualTextDim, outDim: dim)
         self.rotary_embed = RotaryEmbedding(dim: dimHead)
         self.depth = depth
 
         self.transformer_blocks = (0 ..< depth).map { _ in
-            DiTBlock(dim: dim, heads: heads, dimHead: dimHead, ffMult: ffMult, dropout: dropout)
+            DurationBlock(dim: dim, heads: heads, dimHead: dimHead, ffMult: ffMult, dropout: dropout)
         }
 
         self.norm_out = RMSNorm(dimensions: dim)
@@ -66,17 +90,15 @@ public class DurationTransformer: Module {
         text: MLXArray,
         mask: MLXArray? = nil
     ) -> MLXArray {
-        let batchSize = cond.shape[0]
         let seqLen = cond.shape[1]
 
-        let t = time_embed(MLX.ones([batchSize], type: Float32.self))
         let textEmbed = text_embed(text, seqLen: seqLen)
         var x = input_embed(cond: cond, textEmbed: textEmbed)
 
         let rope = rotary_embed.forwardFromSeqLen(seqLen)
 
         for block in transformer_blocks {
-            x = block(x, t: t, mask: mask, rope: rope)
+            x = block(x, mask: mask, rope: rope)
         }
 
         return norm_out(x)
@@ -137,7 +159,7 @@ public class DurationPredictor: Module {
         lens = MLX.maximum(textLens, lens)
 
         var output = transformer(cond: cond, text: inputText)
-        output = to_pred(output).mean()
+        output = to_pred(output).mean().reshaped([batch, -1])
         output.eval()
 
         return output
