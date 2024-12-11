@@ -24,6 +24,12 @@ struct GenerateAudio: AsyncParsableCommand {
     @Option(name: .long, help: "Output path for the generated audio")
     var outputPath: String = "output.wav"
     
+    @Option(name: .long, help: "The number of steps to use for ODE sampling")
+    var steps: Int = 8
+    
+    @Option(name: .long, help: "Method to use for ODE sampling. Options are 'euler', 'midpoint', and 'rk4'.")
+    var method: String = "rk4"
+    
     @Option(name: .long, help: "Strength of classifier free guidance")
     var cfg: Double = 2.0
     
@@ -49,6 +55,8 @@ struct GenerateAudio: AsyncParsableCommand {
             referenceAudioURL: refAudioPath != nil ? URL(filePath: refAudioPath!) : nil,
             referenceAudioText: refAudioText,
             duration: duration,
+            steps: steps,
+            method: F5TTS.ODEMethod(rawValue: method)!,
             cfg: cfg,
             sway: sway,
             speed: speed,

@@ -7,7 +7,74 @@ import Vocos
 
 // MARK: - F5TTS
 
+func odeint_euler(fun: (Float, MLXArray) -> MLXArray, y0: MLXArray, t: MLXArray) -> MLXArray {
+    var ys = [y0]
+    var yCurrent = y0
+
+    for i in 0..<(t.shape[0] - 1) {
+        let tCurrent = t[i].item(Float.self)
+        let dt = t[i + 1].item(Float.self) - tCurrent
+
+        let k = fun(tCurrent, yCurrent)
+        let yNext = yCurrent + dt * k
+
+        ys.append(yNext)
+        yCurrent = yNext
+    }
+
+    return MLX.stacked(ys, axis: 0)
+}
+
+func odeint_midpoint(fun: (Float, MLXArray) -> MLXArray, y0: MLXArray, t: MLXArray) -> MLXArray {
+    var ys = [y0]
+    var yCurrent = y0
+
+    for i in 0..<(t.shape[0] - 1) {
+        let tCurrent = t[i].item(Float.self)
+        let dt = t[i + 1].item(Float.self) - tCurrent
+
+        let k1 = fun(tCurrent, yCurrent)
+        let mid = yCurrent + 0.5 * dt * k1
+
+        let k2 = fun(tCurrent + 0.5 * dt, mid)
+        let yNext = yCurrent + dt * k2
+
+        ys.append(yNext)
+        yCurrent = yNext
+    }
+
+    return MLX.stacked(ys, axis: 0)
+}
+
+func odeint_rk4(fun: (Float, MLXArray) -> MLXArray, y0: MLXArray, t: MLXArray) -> MLXArray {
+    var ys = [y0]
+    var yCurrent = y0
+
+    for i in 0..<(t.shape[0] - 1) {
+        let tCurrent = t[i].item(Float.self)
+        let dt = t[i + 1].item(Float.self) - tCurrent
+
+        let k1 = fun(tCurrent, yCurrent)
+        let k2 = fun(tCurrent + 0.5 * dt, yCurrent + 0.5 * dt * k1)
+        let k3 = fun(tCurrent + 0.5 * dt, yCurrent + 0.5 * dt * k2)
+        let k4 = fun(tCurrent + dt, yCurrent + dt * k3)
+
+        let yNext = yCurrent + (dt / 6) * (k1 + 2 * k2 + 2 * k3 + k4)
+
+        ys.append(yNext)
+        yCurrent = yNext
+    }
+
+    return MLX.stacked(ys)
+}
+
 public class F5TTS: Module {
+    public enum ODEMethod: String {
+        case euler
+        case midpoint
+        case rk4
+    }
+    
     enum F5TTSError: Error {
         case unableToLoadModel
         case unableToLoadReferenceAudio
@@ -38,40 +105,18 @@ public class F5TTS: Module {
         super.init()
     }
 
-    private func odeint(fun: (Float, MLXArray) -> MLXArray, y0: MLXArray, t: MLXArray) -> MLXArray {
-        var ys = [y0]
-        var yCurrent = y0
-
-        for i in 0..<(t.shape[0] - 1) {
-            let tCurrent = t[i].item(Float.self)
-            let dt = t[i + 1].item(Float.self) - tCurrent
-
-            let k1 = fun(tCurrent, yCurrent)
-            let mid = yCurrent + 0.5 * dt * k1
-
-            let k2 = fun(tCurrent + 0.5 * dt, mid)
-            let yNext = yCurrent + dt * k2
-
-            ys.append(yNext)
-            yCurrent = yNext
-        }
-
-        return MLX.stacked(ys, axis: 0)
-    }
-
     private func sample(
         cond: MLXArray,
         text: [String],
         duration: Int? = nil,
         lens: MLXArray? = nil,
-        steps: Int = 32,
+        steps: Int = 8,
+        method: ODEMethod = .rk4,
         cfgStrength: Double = 2.0,
         swayCoef: Double? = -1.0,
         seed: Int? = nil,
         maxDuration: Int = 4096,
         vocoder: ((MLXArray) -> MLXArray)? = nil,
-        noRefAudio: Bool = false,
-        editMask: MLXArray? = nil,
         progressHandler: ((Double) -> Void)? = nil
     ) throws -> (MLXArray, MLXArray) {
         MLX.eval(self.parameters())
@@ -96,9 +141,6 @@ public class F5TTS: Module {
         lens = MLX.maximum(textLens, lens)
 
         var condMask = lensToMask(t: lens)
-        if let editMask = editMask {
-            condMask = condMask & editMask
-        }
 
         // duration
         var resolvedDuration: MLXArray? = (duration != nil) ? MLXArray(duration!) : nil
@@ -124,10 +166,6 @@ public class F5TTS: Module {
         let stepCond = MLX.where(condMask, cond, MLX.zeros(like: cond))
 
         let mask: MLXArray? = (batch > 1) ? lensToMask(t: duration) : nil
-
-        if noRefAudio {
-            cond = MLX.zeros(like: cond)
-        }
 
         // neural ode
 
@@ -169,7 +207,7 @@ public class F5TTS: Module {
 
         var y0: [MLXArray] = []
         for dur in duration {
-            if let seed = seed {
+            if let seed {
                 MLXRandom.seed(UInt64(seed))
             }
             let noise = MLXRandom.normal([dur.item(Int.self), self.numChannels])
@@ -183,11 +221,17 @@ public class F5TTS: Module {
             t = t + coef * (MLX.cos(MLXArray(.pi) / 2 * t) - 1 + t)
         }
 
-        let trajectory = self.odeint(fun: fn, y0: y0Padded, t: t)
+        let odeintFn = switch method {
+        case .euler: odeint_euler
+        case .midpoint: odeint_midpoint
+        case .rk4: odeint_rk4
+        }
+
+        let trajectory = odeintFn(fn, y0Padded, t)
         let sampled = trajectory[-1]
         var out = MLX.where(condMask, cond, sampled)
 
-        if let vocoder = vocoder {
+        if let vocoder {
             out = vocoder(out)
         }
         out.eval()
@@ -200,6 +244,8 @@ public class F5TTS: Module {
         referenceAudioURL: URL? = nil,
         referenceAudioText: String? = nil,
         duration: TimeInterval? = nil,
+        steps: Int = 8,
+        method: ODEMethod = .rk4,
         cfg: Double = 2.0,
         sway: Double = -1.0,
         speed: Double = 1.0,
@@ -234,7 +280,8 @@ public class F5TTS: Module {
             cond: normalizedAudio.expandedDimensions(axis: 0),
             text: [processedText],
             duration: nil,
-            steps: 32,
+            steps: steps,
+            method: method,
             cfgStrength: cfg,
             swayCoef: sway,
             seed: seed,
@@ -339,7 +386,7 @@ public extension F5TTS {
     static var framesPerSecond: Double = .init(sampleRate) / Double(hopLength)
 
     static func loadAudioArray(url: URL) throws -> MLXArray {
-        return try AudioUtilities.loadAudioFile(url: url)
+        try AudioUtilities.loadAudioFile(url: url)
     }
 
     static func referenceAudio() throws -> (MLXArray, String) {
