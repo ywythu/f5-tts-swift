@@ -299,7 +299,7 @@ public class F5TTS: Module {
 
 public extension F5TTS {
     static func fromPretrained(repoId: String, downloadProgress: ((Progress) -> Void)? = nil) async throws -> F5TTS {
-        let modelDirectoryURL = try await Hub.snapshot(from: repoId, matching: ["*.safetensors", "*.txt"]) { progress in
+        let modelDirectoryURL = try await Hub.snapshot(from: repoId, matching: ["model.safetensors", "*.txt", "duration_v2.safetensors"]) { progress in
             downloadProgress?(progress)
         }
         return try self.fromPretrained(modelDirectoryURL: modelDirectoryURL)
